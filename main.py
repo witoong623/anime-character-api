@@ -10,6 +10,9 @@ import common
 
 model_filename = 'one-piece-classifier-b16-fp16.engine'
 input_shape = (3, 224, 224)
+index_to_label = {0: 'Ace', 1: 'Akainu', 2: 'Brook', 3: 'Chopper', 4: 'Crocodile', 5: 'Franky', 6: 'Jinbei',
+                  7: 'Kurohige', 8: 'Law', 9: 'Luffy', 10: 'Mihawk', 11: 'Nami', 12: 'Rayleigh', 13: 'Robin',
+                  14: 'Sanji', 15: 'Shanks', 16: 'Usopp', 17: 'Zoro'}
 
 app = FastAPI()
 
@@ -19,9 +22,12 @@ with open(model_filename, mode='rb') as f:
     engine = trt_runtime.deserialize_cuda_engine(f.read())
 
 trt_context = engine.create_execution_context()
+# TODO: use set_input_shape instead
+trt_context.set_binding_shape(0, (1, 3, 224, 224))
 
 
 def load_normalized_test_case(test_image, pagelocked_buffer):
+    ''' normalize image and copy image to host memory allocated by cudaMallocHost '''
     # Converts the input image to a CHW Numpy array
     def normalize_image(image):
         # Resize, antialias (Image.LANCZOS) and transpose the image to CHW.
@@ -51,18 +57,23 @@ async def read_root():
 async def read_item(item_id: int, q: Union[str, None] = None):
     return {"item_id": item_id, "q": q}
 
-@app.put('/get_characters/')
+@app.put('/predict_character/')
 async def get_prediction(image: UploadFile):
-    inputs, outputs, bindings, stream = common.allocate_buffers(engine, profile_idx=0)
+    # binding is list of pointer to memory on GPU
+    # inputs, outputs are HostDeviceMem
+    # stream is cuda stream created by cudaStreamCreate
+    inputs, outputs, bindings, stream = common.allocate_buffers(engine, trt_context)
 
-    print(bindings)
-    test_case = load_normalized_test_case(image.file, inputs[0].host)
+    load_normalized_test_case(image.file, inputs[0].host)
 
-    trt_outputs = common.do_inference_v2(trt_context, bindings=bindings, inputs=inputs, outputs=outputs, stream=stream)
+    [trt_outputs] = common.do_inference_v2(trt_context, bindings=bindings, inputs=inputs, outputs=outputs,
+                                           stream=stream)
 
-    return [
-        {'name': 'luffy', 'conf': 0.5},
-        {'name': 'nami', 'conf': 0.1},
-        {'name': 'sanji', 'conf': 0.4},
-        {'name': image.filename, 'conf': 0},
-    ]
+    character_idx = np.argmax(trt_outputs, axis=-1)
+
+    response = {'name': index_to_label[character_idx], 'confidence': trt_outputs[character_idx].item()}
+
+    common.free_buffers(inputs, outputs, stream)
+    # after free, can't access any memory allocated by cuda.
+
+    return response
