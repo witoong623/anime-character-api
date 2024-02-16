@@ -48,17 +48,8 @@ def load_normalized_test_case(test_image, pagelocked_buffer):
 
     return test_image
 
-
-@app.get("/")
-async def read_root():
-    return {"Hello": "World"}
-
-@app.get("/items/{item_id}")
-async def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
-
 @app.put('/predict_character/')
-async def get_prediction(image: UploadFile):
+def get_prediction(image: UploadFile):
     # binding is list of pointer to memory on GPU
     # inputs, outputs are HostDeviceMem
     # stream is cuda stream created by cudaStreamCreate
